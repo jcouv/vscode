@@ -394,7 +394,7 @@ export class WatchExpressionsRenderer extends AbstractExpressionsRenderer {
 /**
  * Gets a context key overlay that has context for the given expression.
  */
-function getContextForWatchExpressionMenu(parentContext: IContextKeyService, expression: IExpression, additionalContext: [string, unknown][] = []) {
+export function getContextForWatchExpressionMenu(parentContext: IContextKeyService, expression: IExpression, additionalContext: [string, unknown][] = []) {
 	const session = expression.getSession();
 	return parentContext.createOverlay([
 		[CONTEXT_VARIABLE_EVALUATE_NAME_PRESENT.key, 'evaluateName' in expression],
@@ -410,7 +410,7 @@ function getContextForWatchExpressionMenu(parentContext: IContextKeyService, exp
 /**
  * Gets a context key overlay that has context for the given expression, including data access info.
  */
-async function getContextForWatchExpressionMenuWithDataAccess(parentContext: IContextKeyService, expression: IExpression, debugService: IDebugService, logService: ILogService) {
+export async function getContextForWatchExpressionMenuWithDataAccess(parentContext: IContextKeyService, expression: IExpression, debugService: IDebugService, logService: ILogService) {
 	const session = expression.getSession();
 	if (!session || !session.capabilities.supportsDataBreakpoints) {
 		return getContextForWatchExpressionMenu(parentContext, expression);

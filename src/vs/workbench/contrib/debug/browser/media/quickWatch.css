@@ -1,0 +1,67 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.debug-quick-watch {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	height: 100%;
+	padding: 8px 10px 10px;
+	box-sizing: border-box;
+}
+
+.debug-quick-watch .quick-watch-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.debug-quick-watch .quick-watch-controls .quick-watch-input {
+	flex: 1;
+}
+
+.debug-quick-watch .quick-watch-input {
+	padding: 4px 0;
+}
+
+.debug-quick-watch .quick-watch-message {
+	color: var(--vscode-descriptionForeground);
+	font-size: 11px;
+	line-height: 1.4;
+	white-space: pre-wrap;
+}
+
+.debug-quick-watch .quick-watch-string {
+	border: 1px solid var(--vscode-editorWidget-border);
+	background: var(--vscode-editor-background);
+	flex: 1;
+	min-height: 0;
+}
+
+.debug-quick-watch .quick-watch-string-value {
+	width: 100%;
+	height: 100%;
+	box-sizing: border-box;
+	padding: 8px;
+	border: 0;
+	resize: none;
+	color: var(--vscode-editor-foreground);
+	background: transparent;
+	font: inherit;
+}
+
+.debug-quick-watch .quick-watch-tree {
+	flex: 1;
+	min-height: 0;
+}
+
+.debug-quick-watch .monaco-list-row .expression .actionbar-spacer,
+.debug-quick-watch .monaco-list-row .monaco-action-bar {
+	display: none !important;
+}
+
+.debug-quick-watch .hidden {
+	display: none;
+}
