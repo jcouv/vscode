@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as dom from '../../../../base/browser/dom.js';
 import { IDragAndDropData } from '../../../../base/browser/dnd.js';
 import { ActionBar } from '../../../../base/browser/ui/actionbar/actionbar.js';
 import { IHighlight } from '../../../../base/browser/ui/highlightedlabel/highlightedLabel.js';
@@ -10,11 +11,26 @@ import { IListVirtualDelegate, ListDragOverEffectPosition, ListDragOverEffectTyp
 import { ElementsDragAndDropData, ListViewTargetSector } from '../../../../base/browser/ui/list/listView.js';
 import { IListAccessibilityProvider } from '../../../../base/browser/ui/list/listWidget.js';
 import { ITreeContextMenuEvent, ITreeDragAndDrop, ITreeDragOverReaction, ITreeMouseEvent, ITreeNode } from '../../../../base/browser/ui/tree/tree.js';
+import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { FuzzyScore } from '../../../../base/common/filters.js';
+import { createSingleCallFunction } from '../../../../base/common/functional.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
+import { DisposableStore, IDisposable, dispose, toDisposable } from '../../../../base/common/lifecycle.js';
+import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
+import { ICodeEditor } from '../../../../editor/browser/editorBrowser.js';
+import { EditorAction, registerEditorAction } from '../../../../editor/browser/editorExtensions.js';
+import { CodeEditorWidget } from '../../../../editor/browser/widget/codeEditor/codeEditorWidget.js';
+import { Position } from '../../../../editor/common/core/position.js';
+import { Range } from '../../../../editor/common/core/range.js';
+import { EditorContextKeys } from '../../../../editor/common/editorContextKeys.js';
+import { CompletionContext, CompletionItem, CompletionItemInsertTextRule, CompletionItemKinds, CompletionList } from '../../../../editor/common/languages.js';
+import { ITextModel } from '../../../../editor/common/model.js';
+import { ILanguageFeaturesService } from '../../../../editor/common/services/languageFeatures.js';
+import { IModelService } from '../../../../editor/common/services/model.js';
+import { SuggestController } from '../../../../editor/contrib/suggest/browser/suggestController.js';
 import { getContextMenuActions, } from '../../../../platform/actions/browser/menuEntryActionViewItem.js';
 import { Action2, IMenuService, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
@@ -23,17 +39,20 @@ import { ContextKeyExpr, IContextKey, IContextKeyService } from '../../../../pla
 import { IContextMenuService, IContextViewService } from '../../../../platform/contextview/browser/contextView.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { ServiceCollection } from '../../../../platform/instantiation/common/serviceCollection.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { WorkbenchAsyncDataTree } from '../../../../platform/list/browser/listService.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
+import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { ViewAction, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewletViewOptions } from '../../../browser/parts/views/viewsViewlet.js';
 import { FocusedViewContext } from '../../../common/contextkeys.js';
 import { IViewDescriptorService } from '../../../common/views.js';
-import { CONTEXT_CAN_VIEW_MEMORY, CONTEXT_EXPRESSION_SELECTED, CONTEXT_VARIABLE_IS_READONLY, CONTEXT_VARIABLE_TYPE, CONTEXT_WATCH_EXPRESSIONS_EXIST, CONTEXT_WATCH_EXPRESSIONS_FOCUSED, CONTEXT_WATCH_ITEM_TYPE, IDebugConfiguration, IDebugService, IDebugViewWithVariables, IExpression, CONTEXT_BREAK_WHEN_VALUE_CHANGES_SUPPORTED, CONTEXT_BREAK_WHEN_VALUE_IS_ACCESSED_SUPPORTED, CONTEXT_BREAK_WHEN_VALUE_IS_READ_SUPPORTED, CONTEXT_VARIABLE_EVALUATE_NAME_PRESENT, WATCH_VIEW_ID, CONTEXT_DEBUG_TYPE } from '../common/debug.js';
+import { getSimpleCodeEditorWidgetOptions, getSimpleEditorOptions } from '../../codeEditor/browser/simpleEditorOptions.js';
+import { CONTEXT_CAN_VIEW_MEMORY, CONTEXT_EXPRESSION_SELECTED, CONTEXT_IN_WATCH_EXPRESSION_INPUT, CONTEXT_VARIABLE_IS_READONLY, CONTEXT_VARIABLE_TYPE, CONTEXT_WATCH_EXPRESSIONS_EXIST, CONTEXT_WATCH_EXPRESSIONS_FOCUSED, CONTEXT_WATCH_ITEM_TYPE, DEBUG_SCHEME, IDebugConfiguration, IDebugService, IDebugSession, IDebugViewWithVariables, IExpression, CONTEXT_BREAK_WHEN_VALUE_CHANGES_SUPPORTED, CONTEXT_BREAK_WHEN_VALUE_IS_ACCESSED_SUPPORTED, CONTEXT_BREAK_WHEN_VALUE_IS_READ_SUPPORTED, CONTEXT_VARIABLE_EVALUATE_NAME_PRESENT, WATCH_VIEW_ID, CONTEXT_DEBUG_TYPE } from '../common/debug.js';
 import { Expression, Variable, VisualizedExpression } from '../common/debugModel.js';
 import { AbstractExpressionDataSource, AbstractExpressionsRenderer, expressionAndScopeLabelProvider, IExpressionTemplateData, IInputBoxOptions, renderViewTree } from './baseDebugView.js';
 import { COPY_WATCH_EXPRESSION_COMMAND_ID, setDataBreakpointInfoResponse } from './debugCommands.js';
@@ -41,9 +60,17 @@ import { DebugExpressionRenderer } from './debugExpressionRenderer.js';
 import { watchExpressionsAdd, watchExpressionsRemoveAll } from './debugIcons.js';
 import { VariablesRenderer, VisualizedVariableRenderer } from './variablesView.js';
 
+const $ = dom.$;
 const MAX_VALUE_RENDER_LENGTH_IN_VIEWLET = 1024;
+const WATCH_EXPRESSION_INPUT_URI = URI.parse(`${DEBUG_SCHEME}:watchinput`);
 let ignoreViewUpdates = false;
 let useCachedEvaluation = false;
+
+/**
+ * Callback holder for finishing watch expression input.
+ * Used by editor actions to call finish when Enter or Escape is pressed.
+ */
+let activeWatchExpressionInputFinish: ((success: boolean) => void) | undefined;
 
 export class WatchExpressionsView extends ViewPane implements IDebugViewWithVariables {
 
@@ -52,6 +79,7 @@ export class WatchExpressionsView extends ViewPane implements IDebugViewWithVari
 	private tree!: WorkbenchAsyncDataTree<IDebugService | IExpression, IExpression, FuzzyScore>;
 	private watchExpressionsExist: IContextKey<boolean>;
 	private expressionRenderer: DebugExpressionRenderer;
+	private completionItemProvider: IDisposable | undefined;
 
 	public get treeSelection() {
 		return this.tree.getSelection();
@@ -70,14 +98,15 @@ export class WatchExpressionsView extends ViewPane implements IDebugViewWithVari
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
 		@IMenuService private readonly menuService: IMenuService,
-		@ILogService private readonly logService: ILogService
+		@ILogService private readonly logService: ILogService,
+		@ILanguageFeaturesService private readonly languageFeaturesService: ILanguageFeaturesService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 
-		this.watchExpressionsUpdatedScheduler = this._register(new RunOnceScheduler(() => {
+		this.watchExpressionsUpdatedScheduler = new RunOnceScheduler(() => {
 			this.needsRefresh = false;
 			this.tree.updateChildren();
-		}, 50));
+		}, 50);
 		this.watchExpressionsExist = CONTEXT_WATCH_EXPRESSIONS_EXIST.bindTo(contextKeyService);
 		this.watchExpressionsExist.set(this.debugService.getModel().getWatchExpressions().length > 0);
 		this.expressionRenderer = instantiationService.createInstance(DebugExpressionRenderer);
@@ -116,6 +145,10 @@ export class WatchExpressionsView extends ViewPane implements IDebugViewWithVari
 		this._register(this.tree);
 		this.tree.setInput(this.debugService);
 		CONTEXT_WATCH_EXPRESSIONS_FOCUSED.bindTo(this.tree.contextKeyService);
+
+		// Register completion provider for watch expressions
+		this._register(this.debugService.getViewModel().onDidFocusSession(session => this.onDidFocusSession(session)));
+		this.onDidFocusSession(this.debugService.getViewModel().focusedSession);
 
 		this._register(VisualizedVariableRenderer.rendererOnVisualizationRange(this.debugService.getViewModel(), this.tree));
 		this._register(this.tree.onContextMenu(e => this.onContextMenu(e)));
@@ -196,6 +229,92 @@ export class WatchExpressionsView extends ViewPane implements IDebugViewWithVari
 
 	collapseAll(): void {
 		this.tree.collapseAll();
+	}
+
+	private onDidFocusSession(session: IDebugSession | undefined): void {
+		this.completionItemProvider?.dispose();
+		this.completionItemProvider = undefined;
+
+		if (session && session.capabilities.supportsCompletionsRequest) {
+			this.completionItemProvider = this.languageFeaturesService.completionProvider.register(
+				{ scheme: DEBUG_SCHEME, pattern: '**/watchinput', hasAccessToAllModels: true },
+				{
+					_debugDisplayName: 'watchExpressions',
+					triggerCharacters: session.capabilities.completionTriggerCharacters || ['.'],
+					provideCompletionItems: async (_: ITextModel, position: Position, _context: CompletionContext, token: CancellationToken): Promise<CompletionList> => {
+						const focusedSession = this.debugService.getViewModel().focusedSession;
+						if (!focusedSession || !focusedSession.capabilities.supportsCompletionsRequest) {
+							return { suggestions: [] };
+						}
+
+						const model = this.languageFeaturesService.completionProvider._orderedByScore._items.find(() => true); // Just need access to the model
+						const text = WATCH_EXPRESSION_INPUT_URI.toString();
+						const focusedStackFrame = this.debugService.getViewModel().focusedStackFrame;
+						const frameId = focusedStackFrame?.frameId;
+
+						// Get the actual model text from anywhere we can
+						let expressionText = '';
+						// The model is created in the renderer, we need to get the text from there
+						// For now, use a simple approach - the model exists with WATCH_EXPRESSION_INPUT_URI
+						try {
+							const modelService = this.instantiationService.invokeFunction(accessor => accessor.get(IModelService));
+							const inputModel = modelService.getModel(WATCH_EXPRESSION_INPUT_URI);
+							if (inputModel) {
+								expressionText = inputModel.getValue();
+							}
+						} catch {
+							return { suggestions: [] };
+						}
+
+						try {
+							const response = await focusedSession.completions(
+								frameId,
+								focusedStackFrame?.thread.threadId || 0,
+								expressionText,
+								position,
+								token
+							);
+
+							const suggestions: CompletionItem[] = [];
+							const computeRange = (length: number) => Range.fromPositions(position.delta(0, -length), position);
+
+							if (response?.body?.targets) {
+								for (const item of response.body.targets) {
+									if (item?.label) {
+										let insertTextRules: CompletionItemInsertTextRule | undefined = undefined;
+										let insertText = item.text || item.label;
+
+										if (typeof item.selectionStart === 'number') {
+											insertTextRules = CompletionItemInsertTextRule.InsertAsSnippet;
+											const selectionLength = typeof item.selectionLength === 'number' ? item.selectionLength : 0;
+											const placeholder = selectionLength > 0
+												? '${1:' + insertText.substring(item.selectionStart, item.selectionStart + selectionLength) + '}$0'
+												: '$0';
+											insertText = insertText.substring(0, item.selectionStart) + placeholder + insertText.substring(item.selectionStart + selectionLength);
+										}
+
+										suggestions.push({
+											label: item.label,
+											insertText,
+											detail: item.detail,
+											kind: CompletionItemKinds.fromString(item.type || 'property'),
+											filterText: (item.start && item.length) ? expressionText.substring(item.start, item.start + item.length).concat(item.label) : undefined,
+											range: computeRange(item.length || 0),
+											sortText: item.sortText,
+											insertTextRules
+										});
+									}
+								}
+							}
+
+							return { suggestions };
+						} catch {
+							return { suggestions: [] };
+						}
+					}
+				}
+			);
+		}
 	}
 
 	private onMouseDblClick(e: ITreeMouseEvent<IExpression>): void {
@@ -292,6 +411,8 @@ export class WatchExpressionsRenderer extends AbstractExpressionsRenderer {
 		@IContextViewService contextViewService: IContextViewService,
 		@IHoverService hoverService: IHoverService,
 		@IConfigurationService private configurationService: IConfigurationService,
+		@IInstantiationService private readonly instantiationService: IInstantiationService,
+		@IModelService private readonly modelService: IModelService,
 	) {
 		super(debugService, contextViewService, hoverService);
 	}
@@ -308,6 +429,102 @@ export class WatchExpressionsRenderer extends AbstractExpressionsRenderer {
 			}
 		}));
 		super.renderExpressionElement(node.element, node, data);
+	}
+
+	public override renderInputBox(nameElement: HTMLElement, valueElement: HTMLElement, inputBoxContainer: HTMLElement, options: IInputBoxOptions): IDisposable {
+		nameElement.style.display = 'none';
+		valueElement.style.display = 'none';
+		inputBoxContainer.style.display = 'initial';
+		inputBoxContainer.classList.add('watch-input-box');
+		dom.clearNode(inputBoxContainer);
+
+		const scopedContextKeyService = this.contextKeyService.createScoped(inputBoxContainer);
+		const inWatchExpressionInputContext = CONTEXT_IN_WATCH_EXPRESSION_INPUT.bindTo(scopedContextKeyService);
+		inWatchExpressionInputContext.set(true);
+
+		const scopedInstantiationService = this.instantiationService.createChild(
+			new ServiceCollection([IContextKeyService, scopedContextKeyService])
+		);
+
+		// Clean up any existing model
+		const existingModel = this.modelService.getModel(WATCH_EXPRESSION_INPUT_URI);
+		if (existingModel) {
+			existingModel.dispose();
+		}
+
+		// Create the text model
+		const model = this.modelService.createModel(options.initialValue, null, WATCH_EXPRESSION_INPUT_URI, true);
+
+		// Create editor options for single-line input
+		const editorOptions = getSimpleEditorOptions(this.configurationService);
+		editorOptions.wordWrap = 'off';
+		editorOptions.lineNumbers = 'off';
+		editorOptions.lineDecorationsWidth = 0;
+		editorOptions.scrollBeyondLastLine = false;
+		editorOptions.scrollbar = { horizontal: 'hidden', vertical: 'hidden', alwaysConsumeMouseWheel: false };
+		editorOptions.minimap = { enabled: false };
+		editorOptions.renderLineHighlight = 'none';
+		editorOptions.glyphMargin = false;
+		editorOptions.folding = false;
+		editorOptions.padding = { top: 0, bottom: 0 };
+		editorOptions.ariaLabel = options.ariaLabel;
+
+		const editor = scopedInstantiationService.createInstance(
+			CodeEditorWidget,
+			inputBoxContainer,
+			editorOptions,
+			getSimpleCodeEditorWidgetOptions()
+		);
+
+		editor.setModel(model);
+		editor.focus();
+		editor.setSelection(Range.fromPositions({ lineNumber: 1, column: 1 }, { lineNumber: 1, column: model.getValueLength() + 1 }));
+
+		// Set up the layout - make it single line height
+		const lineHeight = editor.getOption(/* EditorOption.lineHeight */ 67);
+		inputBoxContainer.style.height = `${lineHeight}px`;
+		editor.layout({ width: inputBoxContainer.clientWidth || 200, height: lineHeight });
+
+		const done = createSingleCallFunction((success: boolean, finishEditing: boolean) => {
+			activeWatchExpressionInputFinish = undefined;
+			inWatchExpressionInputContext.set(false);
+			nameElement.style.display = '';
+			valueElement.style.display = '';
+			inputBoxContainer.style.display = 'none';
+			inputBoxContainer.classList.remove('watch-input-box');
+			const value = model.getValue();
+			dispose(toDispose);
+
+			if (finishEditing) {
+				this.debugService.getViewModel().setSelectedExpression(undefined, false);
+				options.onFinish(value, success);
+			}
+		});
+
+		// Store the finish callback for editor actions
+		activeWatchExpressionInputFinish = (success: boolean) => done(success, true);
+
+		const toDispose: IDisposable[] = [
+			editor,
+			model,
+			scopedContextKeyService,
+			dom.addDisposableListener(editor.getDomNode()!, dom.EventType.BLUR, (e: FocusEvent) => {
+				// Check if focus moved to suggest widget
+				const relatedTarget = e.relatedTarget as HTMLElement | null;
+				if (relatedTarget && (relatedTarget.closest('.editor-widget.suggest-widget') || relatedTarget.closest('.monaco-editor'))) {
+					return;
+				}
+				done(true, true);
+			}),
+			dom.addDisposableListener(inputBoxContainer, dom.EventType.CLICK, e => {
+				e.preventDefault();
+				e.stopPropagation();
+			})
+		];
+
+		return toDisposable(() => {
+			done(false, false);
+		});
 	}
 
 	protected renderExpression(expression: IExpression, data: IExpressionTemplateData, highlights: IHighlight[]): void {
@@ -394,7 +611,7 @@ export class WatchExpressionsRenderer extends AbstractExpressionsRenderer {
 /**
  * Gets a context key overlay that has context for the given expression.
  */
-export function getContextForWatchExpressionMenu(parentContext: IContextKeyService, expression: IExpression, additionalContext: [string, unknown][] = []) {
+function getContextForWatchExpressionMenu(parentContext: IContextKeyService, expression: IExpression, additionalContext: [string, unknown][] = []) {
 	const session = expression.getSession();
 	return parentContext.createOverlay([
 		[CONTEXT_VARIABLE_EVALUATE_NAME_PRESENT.key, 'evaluateName' in expression],
@@ -410,7 +627,7 @@ export function getContextForWatchExpressionMenu(parentContext: IContextKeyServi
 /**
  * Gets a context key overlay that has context for the given expression, including data access info.
  */
-export async function getContextForWatchExpressionMenuWithDataAccess(parentContext: IContextKeyService, expression: IExpression, debugService: IDebugService, logService: ILogService) {
+async function getContextForWatchExpressionMenuWithDataAccess(parentContext: IContextKeyService, expression: IExpression, debugService: IDebugService, logService: ILogService) {
 	const session = expression.getSession();
 	if (!session || !session.capabilities.supportsDataBreakpoints) {
 		return getContextForWatchExpressionMenu(parentContext, expression);
@@ -692,3 +909,51 @@ registerAction2(class CopyExpression extends ViewAction<WatchExpressionsView> {
 		}
 	}
 });
+
+// Editor actions for watch expression input
+class AcceptWatchExpressionInputAction extends EditorAction {
+	constructor() {
+		super({
+			id: 'watch.action.acceptInput',
+			label: localize('watchAcceptInput', "Watch: Accept Input"),
+			precondition: CONTEXT_IN_WATCH_EXPRESSION_INPUT,
+			kbOpts: {
+				kbExpr: EditorContextKeys.textInputFocus,
+				primary: KeyCode.Enter,
+				weight: KeybindingWeight.EditorContrib
+			}
+		});
+	}
+
+	run(accessor: ServicesAccessor, editor: ICodeEditor): void {
+		SuggestController.get(editor)?.cancelSuggestWidget();
+		activeWatchExpressionInputFinish?.(true);
+	}
+}
+
+class CancelWatchExpressionInputAction extends EditorAction {
+	constructor() {
+		super({
+			id: 'watch.action.cancelInput',
+			label: localize('watchCancelInput', "Watch: Cancel Input"),
+			precondition: CONTEXT_IN_WATCH_EXPRESSION_INPUT,
+			kbOpts: {
+				kbExpr: EditorContextKeys.textInputFocus,
+				primary: KeyCode.Escape,
+				weight: KeybindingWeight.EditorContrib
+			}
+		});
+	}
+
+	run(accessor: ServicesAccessor, editor: ICodeEditor): void {
+		SuggestController.get(editor)?.cancelSuggestWidget();
+		activeWatchExpressionInputFinish?.(false);
+	}
+}
+
+registerEditorAction(AcceptWatchExpressionInputAction);
+registerEditorAction(CancelWatchExpressionInputAction);
+
+function getWatchExpressionsView(viewsService: IViewsService): WatchExpressionsView | undefined {
+	return viewsService.getActiveViewWithId(WATCH_VIEW_ID) as WatchExpressionsView | undefined;
+}
