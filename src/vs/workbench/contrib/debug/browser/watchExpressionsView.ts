@@ -17,7 +17,7 @@ import { Codicon } from '../../../../base/common/codicons.js';
 import { FuzzyScore } from '../../../../base/common/filters.js';
 import { createSingleCallFunction } from '../../../../base/common/functional.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
-import { DisposableStore, IDisposable, dispose, toDisposable } from '../../../../base/common/lifecycle.js';
+import { IDisposable, dispose, toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
 import { ICodeEditor } from '../../../../editor/browser/editorBrowser.js';
@@ -26,6 +26,7 @@ import { CodeEditorWidget } from '../../../../editor/browser/widget/codeEditor/c
 import { Position } from '../../../../editor/common/core/position.js';
 import { Range } from '../../../../editor/common/core/range.js';
 import { EditorContextKeys } from '../../../../editor/common/editorContextKeys.js';
+import { EditorOption } from '../../../../editor/common/config/editorOptions.js';
 import { CompletionContext, CompletionItem, CompletionItemInsertTextRule, CompletionItemKinds, CompletionList } from '../../../../editor/common/languages.js';
 import { ITextModel } from '../../../../editor/common/model.js';
 import { ILanguageFeaturesService } from '../../../../editor/common/services/languageFeatures.js';
@@ -46,7 +47,6 @@ import { KeybindingWeight } from '../../../../platform/keybinding/common/keybind
 import { WorkbenchAsyncDataTree } from '../../../../platform/list/browser/listService.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
-import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { ViewAction, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewletViewOptions } from '../../../browser/parts/views/viewsViewlet.js';
 import { FocusedViewContext } from '../../../common/contextkeys.js';
@@ -60,7 +60,6 @@ import { DebugExpressionRenderer } from './debugExpressionRenderer.js';
 import { watchExpressionsAdd, watchExpressionsRemoveAll } from './debugIcons.js';
 import { VariablesRenderer, VisualizedVariableRenderer } from './variablesView.js';
 
-const $ = dom.$;
 const MAX_VALUE_RENDER_LENGTH_IN_VIEWLET = 1024;
 const WATCH_EXPRESSION_INPUT_URI = URI.parse(`${DEBUG_SCHEME}:watchinput`);
 let ignoreViewUpdates = false;
@@ -247,8 +246,6 @@ export class WatchExpressionsView extends ViewPane implements IDebugViewWithVari
 							return { suggestions: [] };
 						}
 
-						const model = this.languageFeaturesService.completionProvider._orderedByScore._items.find(() => true); // Just need access to the model
-						const text = WATCH_EXPRESSION_INPUT_URI.toString();
 						const focusedStackFrame = this.debugService.getViewModel().focusedStackFrame;
 						const frameId = focusedStackFrame?.frameId;
 
@@ -481,7 +478,7 @@ export class WatchExpressionsRenderer extends AbstractExpressionsRenderer {
 		editor.setSelection(Range.fromPositions({ lineNumber: 1, column: 1 }, { lineNumber: 1, column: model.getValueLength() + 1 }));
 
 		// Set up the layout - make it single line height
-		const lineHeight = editor.getOption(/* EditorOption.lineHeight */ 67);
+		const lineHeight = editor.getOption(EditorOption.lineHeight);
 		inputBoxContainer.style.height = `${lineHeight}px`;
 		editor.layout({ width: inputBoxContainer.clientWidth || 200, height: lineHeight });
 
@@ -611,7 +608,7 @@ export class WatchExpressionsRenderer extends AbstractExpressionsRenderer {
 /**
  * Gets a context key overlay that has context for the given expression.
  */
-function getContextForWatchExpressionMenu(parentContext: IContextKeyService, expression: IExpression, additionalContext: [string, unknown][] = []) {
+export function getContextForWatchExpressionMenu(parentContext: IContextKeyService, expression: IExpression, additionalContext: [string, unknown][] = []) {
 	const session = expression.getSession();
 	return parentContext.createOverlay([
 		[CONTEXT_VARIABLE_EVALUATE_NAME_PRESENT.key, 'evaluateName' in expression],
@@ -627,7 +624,7 @@ function getContextForWatchExpressionMenu(parentContext: IContextKeyService, exp
 /**
  * Gets a context key overlay that has context for the given expression, including data access info.
  */
-async function getContextForWatchExpressionMenuWithDataAccess(parentContext: IContextKeyService, expression: IExpression, debugService: IDebugService, logService: ILogService) {
+export async function getContextForWatchExpressionMenuWithDataAccess(parentContext: IContextKeyService, expression: IExpression, debugService: IDebugService, logService: ILogService) {
 	const session = expression.getSession();
 	if (!session || !session.capabilities.supportsDataBreakpoints) {
 		return getContextForWatchExpressionMenu(parentContext, expression);
@@ -916,6 +913,7 @@ class AcceptWatchExpressionInputAction extends EditorAction {
 		super({
 			id: 'watch.action.acceptInput',
 			label: localize('watchAcceptInput', "Watch: Accept Input"),
+			alias: 'Watch: Accept Input',
 			precondition: CONTEXT_IN_WATCH_EXPRESSION_INPUT,
 			kbOpts: {
 				kbExpr: EditorContextKeys.textInputFocus,
@@ -936,6 +934,7 @@ class CancelWatchExpressionInputAction extends EditorAction {
 		super({
 			id: 'watch.action.cancelInput',
 			label: localize('watchCancelInput', "Watch: Cancel Input"),
+			alias: 'Watch: Cancel Input',
 			precondition: CONTEXT_IN_WATCH_EXPRESSION_INPUT,
 			kbOpts: {
 				kbExpr: EditorContextKeys.textInputFocus,
@@ -953,7 +952,3 @@ class CancelWatchExpressionInputAction extends EditorAction {
 
 registerEditorAction(AcceptWatchExpressionInputAction);
 registerEditorAction(CancelWatchExpressionInputAction);
-
-function getWatchExpressionsView(viewsService: IViewsService): WatchExpressionsView | undefined {
-	return viewsService.getActiveViewWithId(WATCH_VIEW_ID) as WatchExpressionsView | undefined;
-}

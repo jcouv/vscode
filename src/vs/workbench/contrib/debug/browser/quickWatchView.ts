@@ -36,7 +36,7 @@ import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IEditorOpenContext } from '../../../common/editor.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
-import { IDebugService, IExpression, IStackFrame, QUICK_WATCH_VIEW_ID } from '../common/debug.js';
+import { IDebugService, IExpression, IStackFrame } from '../common/debug.js';
 import { Expression, Variable, VisualizedExpression } from '../common/debugModel.js';
 import { DebugExpressionRenderer } from './debugExpressionRenderer.js';
 import { VariablesRenderer, VisualizedVariableRenderer, openContextMenuForVariableTreeElement } from './variablesView.js';
@@ -214,7 +214,7 @@ export class QuickWatchEditor extends EditorPane {
 		@IContextMenuService private readonly contextMenuService: IContextMenuService,
 		@IContextViewService private readonly contextViewService: IContextViewService,
 	) {
-		super(QUICK_WATCH_VIEW_ID, group, telemetryService, themeService, storageService);
+		super(QuickWatchEditorInput.ID, group, telemetryService, themeService, storageService);
 	}
 
 	protected createEditor(parent: HTMLElement): void {
